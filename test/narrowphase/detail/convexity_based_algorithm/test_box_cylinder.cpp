@@ -40,6 +40,7 @@
  */
 
 #include "fcl/narrowphase/detail/convexity_based_algorithm/gjk_libccd-inl.h"
+#include "fcl/narrowphase/distance.h"
 
 #include <gtest/gtest.h>
 #include <Eigen/Dense>
@@ -50,7 +51,7 @@ namespace fcl {
 namespace detail {
 template <typename S>
 void TestBoxCylinderDistance() {
-  fcl::Box<S> box(0.05, 0.39, 1.47);
+  /*fcl::Box<S> box(0.05, 0.39, 1.47);
   fcl::Cylinder<S> cylinder(0.18, 0.18);
   fcl::Transform3<S> tf1, tf2;
   tf1.setIdentity();
@@ -76,7 +77,29 @@ void TestBoxCylinderDistance() {
       &p_FN1, &p_FN2);
   std::cout << "distance: " << dist << "\n";
 
-  EXPECT_TRUE(res);
+  EXPECT_TRUE(res);*/
+  std::shared_ptr<CollisionGeometry<S>> box_geometry(
+      new Box<S>(0.05, 0.39, 1.47));
+  std::shared_ptr<CollisionGeometry<S>> cylinder_geometry(
+      new Cylinder<S>(0.18, 0.18));
+  CollisionObject<S> box_object(
+      box_geometry, Eigen::Quaterniond(std::sqrt(2) / 2, 0, 0, std::sqrt(2) / 2)
+                        .toRotationMatrix(),
+      Eigen::Vector3d(0.8, -0.385, 0.735));
+  CollisionObject<S> cylinder_object(
+      cylinder_geometry,
+      Eigen::Quaterniond(0.991445, 0, 0, -0.130526).toRotationMatrix(),
+      Eigen::Vector3d(0.4, -0.4, 0.93));
+  DistanceRequest<S> request;
+  request.enable_nearest_points = true;
+  request.enable_signed_distance = true;
+  request.distance_tolerance = 1e-6;
+  request.gjk_solver_type = fcl::GST_LIBCCD;
+  DistanceResult<S> result;
+
+  EXPECT_NO_THROW(
+      fcl::distance(&box_object, &cylinder_object, request, result));
+  std::cout << "distance: " << result.min_distance << "\n";
 }
 
 GTEST_TEST(FCL_GJK_EPA, box_cylinder) { TestBoxCylinderDistance<double>(); }
