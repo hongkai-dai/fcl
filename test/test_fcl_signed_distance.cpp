@@ -115,6 +115,13 @@ void test_distance_spheresphere(GJKSolverType solver_type)
     EXPECT_TRUE(CompareMatrices(result.nearest_points[1], p1_expected,
                                 distance_tolerance));
   }
+
+  // Test two spheres with coinciding centers.
+  result.clear();
+  tf1.translation() = tf2.translation();
+  distance(&s1, tf1, &s2, tf2, request, result);
+  EXPECT_NEAR(result.min_distance, -radius_1 - radius_2,
+              request.distance_tolerance);
 }
 
 template <typename S>
