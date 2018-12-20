@@ -45,6 +45,31 @@ using namespace fcl;
 
 bool verbose = false;
 
+template <typename S>
+void test_distance_spheresphere_error(GJKSolverType solver_type) {
+  const S radius_1 = 0.1;
+  const S radius_2 = 0.2;
+  Sphere<S> s1{radius_1};
+  Sphere<S> s2{radius_2};
+
+  Transform3<S> tf1{Transform3<S>::Identity()};
+  Transform3<S> tf2{Transform3<S>::Identity()};
+
+  DistanceRequest<S> request;
+  request.enable_signed_distance = true;
+  request.enable_nearest_points = true;
+  request.gjk_solver_type = solver_type;
+  request.distance_tolerance = 1E-6;
+
+  DistanceResult<S> result;
+
+  result.clear();
+  tf1.translation() << 0.1, 0.2, 0.3;
+  tf2.translation() << 0.11, 0.21, 0.31;
+  distance(&s1, tf1, &s2, tf2, request, result);
+  printf("distance %.15f\n", result.min_distance);
+}
+
 //==============================================================================
 template <typename S>
 void test_distance_spheresphere(GJKSolverType solver_type)
@@ -165,6 +190,17 @@ void test_distance_spherecapsule(GJKSolverType solver_type)
 }
 
 //==============================================================================
+
+GTEST_TEST(FCL_NEGATIVE_DISTANCE, sphere_sphere_error_ccd) {
+  test_distance_spheresphere_error<double>(GST_LIBCCD);
+  test_distance_spheresphere_error<double>(GST_LIBCCD);
+  test_distance_spheresphere_error<double>(GST_LIBCCD);
+  test_distance_spheresphere_error<double>(GST_LIBCCD);
+  test_distance_spheresphere_error<double>(GST_LIBCCD);
+  test_distance_spheresphere_error<double>(GST_LIBCCD);
+  test_distance_spheresphere_error<double>(GST_LIBCCD);
+  test_distance_spheresphere_error<double>(GST_LIBCCD);
+}
 
 GTEST_TEST(FCL_NEGATIVE_DISTANCE, sphere_sphere_ccd)
 {
