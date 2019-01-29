@@ -442,6 +442,15 @@ static int doSimplex4(ccd_simplex_t *simplex, ccd_vec3_t *dir)
   return doSimplex3(simplex, dir);
 }
 
+/**
+ * doSimplex does the following things.
+ * 1. Compute the point within simplex that is closest to the origin, this point
+ * is denoted as v.
+ * 2. Update the simplex, such that the new simplex contains the minimal number
+ * of vertices from the original simplex, and the point v (computed in step 1)
+ * can be written as a convex combination of the vertices in the new simplex.
+ * 3. Compute the next direction as -v.
+ */
 static int doSimplex(ccd_simplex_t *simplex, ccd_vec3_t *dir)
 {
   if (ccdSimplexSize(simplex) == 2){
@@ -948,6 +957,11 @@ static ccd_vec3_t faceNormalPointingOutward(const ccd_pt_t* polytope,
 // @param pt A point.
 static bool isOutsidePolytopeFace(const ccd_pt_t* polytope,
                                 const ccd_pt_face_t* f, const ccd_vec3_t* pt) {
+  ccd_pt_vertex_t *v;
+  ccdListForEachEntry(&polytope->vertices, v, ccd_pt_vertex_t, list) {
+    std::cout << v->v.v.v[0] << " " << v->v.v.v[1] << " " << v->v.v.v[2]
+              << "\n";
+  }
   ccd_vec3_t n = faceNormalPointingOutward(polytope, f);
   // r_VP is the vector from a vertex V on the face `f`, to the point P `pt`.
   ccd_vec3_t r_VP;
@@ -1346,12 +1360,37 @@ static int nextSupport(const ccd_pt_t* polytope, const void* obj1,
   return 0;
 }
 
+// The return status of running separating axis GJK algorithm.
+enum class SeparatingAxisGJKStatus {
+  kSeparated, //< The geometry A and B are separated. A ∩ B = ∅. Note this
+              // doesn't include the touching contact.
+  kIntersecting,    //< The geometry A and B intersects. A ∩ B ≠ ∅. This
+                    // includes touching contact.
+  kIterationsLimit, //< Cannot determine if A and B are separated or not when
+                    // the iterations limit is reached.
+};
+/**
+ * Use separating Axis-GJK algorithm to determine if the two geometries A and B
+ * are separated or not.
+ * For more details on separating axis-GJK algorithm, please refer to section
+ * 2.3.3 of Real-time Collision Detection with Implicit Objects by Leif Olvang,
+ * 2010.
+ * @param[in] obj1 The geometry A.
+ * @param[in] obj2 The geometry B.
+ * @param[in] ccd The ccd solver.
+ * @param[out] simplex The simplex at the termination. The simplex is contained
+ * in the Minkowski difference A ⊖ B. If A and B are separated, then the origin
+ * 0 is outside of the simplex. If A and B are intersecting, then the origin is
+ * strictly inside the simplex.
+ * @return is_intersecting true if A is intersecting with B, namely A ∩ B ≠ ∅.
+ * Notice that touching contact is counted as intersecting also.
+ */
+static SeparatingAxisGJKStatus separatingAxisGJK(const void *obj1,
+                                                 const void *obj2,
+                                                 const ccd_t *ccd,
+                                                 ccd_simplex_t *simplex) {
 
-static int __ccdGJK(const void *obj1, const void *obj2,
-                    const ccd_t *ccd, ccd_simplex_t *simplex)
-{
-  unsigned long iterations;
-  ccd_vec3_t dir; // direction vector
+  ccd_vec3_t dir;     // direction vector
   ccd_support_t last; // last support point
   int do_simplex_res;
 
@@ -1370,38 +1409,41 @@ static int __ccdGJK(const void *obj1, const void *obj2,
   ccdVec3Scale(&dir, -CCD_ONE);
 
   // start iterations
-  for (iterations = 0UL; iterations < ccd->max_iterations; ++iterations) {
+  // for (iterations = 0UL; iterations < ccd->max_iterations; ++iterations) {
+  unsigned long iterations = 0;
+  while (!isAbsValueLessThanEpsSquared(ccdVec3Len2(&dir))) {
     // obtain support point
     __ccdSupport(obj1, obj2, &dir, ccd, &last);
 
-    // check if farthest point in Minkowski difference in direction dir
-    // isn't somewhere before origin (the test on negative dot product)
-    // - because if it is, objects are not intersecting at all.
-    if (ccdVec3Dot(&last.v, &dir) < CCD_ZERO){
-      return -1; // intersection not found
+    if (ccdVec3Dot(&last.v, &dir) < CCD_ZERO) {
+      // The plane with normal dir and passes last.v separates the origin from
+      // the Minkoski difference A ⊖ B. Hence A and B are separated.
+      return SeparatingAxisGJKStatus::kSeparated;
     }
 
     // add last support vector to simplex
     ccdSimplexAdd(simplex, &last);
 
-    // if doSimplex returns 1 if objects intersect, -1 if objects don't
-    // intersect and 0 if algorithm should continue
+    // doSimplex returns 1 if the simplex contains origin, i.e., the origin is
+    // either in the strict interior or on the boundary of the simplex.
     do_simplex_res = doSimplex(simplex, &dir);
-    if (do_simplex_res == 1){
-      return 0; // intersection found
-    }else if (do_simplex_res == -1){
-      return -1; // intersection not found
+    if (do_simplex_res == 1) {
+      // If the origin is in the simplex, then A intersects with B.
+      return SeparatingAxisGJKStatus::kIntersecting;
+    } else if (do_simplex_res == -1) {
+      // A is separated from B.
+      return SeparatingAxisGJKStatus::kSeparated;
     }
-
-    if (ccdIsZero(ccdVec3Len2(&dir))){
-      return -1; // intersection not found
+    if (++iterations >= ccd->max_iterations) {
+      return SeparatingAxisGJKStatus::kIterationsLimit;
     }
   }
-
-  // intersection wasn't found
-  return -1;
+  // When exiting the while loop without reaching the iterations limit, the
+  // condition |dir|² < eps holds. Since dir = -v, where v is the point closest
+  // to origin in the simplex, |dir|² < eps implies that v is almost 0. Hence
+  // the origin is inside the simplex, implying the A intersects with B.
+  return SeparatingAxisGJKStatus::kIntersecting;
 }
-
 
 static int __ccdEPA(const void *obj1, const void *obj2,
                     const ccd_t *ccd,
@@ -1422,16 +1464,16 @@ static int __ccdEPA(const void *obj1, const void *obj2,
     } else if (size == 3) {
       ret = convert2SimplexToTetrahedron(obj1, obj2, ccd, simplex, polytope,
                                          nearest);
-    }else{ // size == 2
-        ret = simplexToPolytope2(obj1, obj2, ccd, simplex, polytope, nearest);
+    } else { // size == 2
+      ret = simplexToPolytope2(obj1, obj2, ccd, simplex, polytope, nearest);
     }
 
     if (ret == -1){
         // touching contact
         return 0;
-    }else if (ret == -2){
-        // failed memory allocation
-        return -2;
+    } else if (ret == -2) {
+      // failed memory allocation
+      return -2;
     }
 
     while (1){
@@ -1839,7 +1881,9 @@ static inline ccd_real_t ccdGJKSignedDist(const void* obj1, const void* obj2,
 {
   ccd_simplex_t simplex;
 
-  if (__ccdGJK(obj1, obj2, ccd, &simplex) == 0) // in collision, then using the EPA
+  if (separatingAxisGJK(obj1, obj2, ccd, &simplex) ==
+      SeparatingAxisGJKStatus::kIntersecting) // in collision, then using the
+                                              // EPA
   {
     ccd_pt_t polytope;
     ccd_pt_el_t *nearest;
@@ -1902,7 +1946,8 @@ static inline ccd_real_t ccdGJKDist2(const void *obj1, const void *obj2,
 {
   ccd_simplex_t simplex;
   // first find an intersection
-  if (__ccdGJK(obj1, obj2, ccd, &simplex) == 0)
+  if (separatingAxisGJK(obj1, obj2, ccd, &simplex) ==
+      SeparatingAxisGJKStatus::kIntersecting)
     return -CCD_ONE;
 
   return _ccdDist(obj1, obj2, ccd, &simplex, p1, p2);
