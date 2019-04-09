@@ -164,6 +164,142 @@ void test_distance_spherecapsule(GJKSolverType solver_type)
   }
 }
 
+template <typename S>
+void test_distance_cylinder_sphere1() {
+  // This is a specific case that has cropped up in the wild that reaches the
+  // unexpected `expandPolytope()` error, where the nearest point and the new
+  // vertex both lie on an edge. It turns out that libccd incorrectly thinks
+  // that the edge is the nearest feature, while actually one of the
+  // neighbouring faces is. This test confirms that the bug is fixed, by the
+  // function validateNearestFeatureOfPolytopeBeingEdge().
+  using CollisionGeometryPtr_t = std::shared_ptr<fcl::CollisionGeometry<S>>;
+  const S cylinder_radius = 0.03;
+  const S cylinder_length = 0.65;
+  CollisionGeometryPtr_t cylinder_geo(
+      new fcl::Cylinder<S>(cylinder_radius, cylinder_length));
+  Transform3<S> X_WC = Transform3<S>::Identity();
+  X_WC.translation() << 0.6, 0, 0.325;
+  fcl::CollisionObject<S> cylinder(cylinder_geo, X_WC);
+
+  const S sphere_radius = 0.055;
+  CollisionGeometryPtr_t sphere_geo(new fcl::Sphere<S>(sphere_radius));
+  Transform3<S> X_WS = Transform3<S>::Identity();
+  // clang-format off
+  X_WS.matrix() << -0.9954758066,  -0.0295866301,  0.0902914702,  0.5419794018,
+                   -0.0851034786,  -0.1449450565, -0.9857729599, -0.0621175025,
+                    0.0422530022,  -0.9889972506,  0.1417713719,  0.6016236576,
+                               0,              0,             0,             1;
+  // clang-format on
+  fcl::CollisionObject<S> sphere(sphere_geo, X_WS);
+
+  fcl::DistanceRequest<S> request;
+  request.gjk_solver_type = GJKSolverType::GST_LIBCCD;
+  request.distance_tolerance = 1e-6;
+  request.enable_signed_distance = true;
+  fcl::DistanceResult<S> result;
+
+  ASSERT_NO_THROW(fcl::distance(&cylinder, &sphere, request, result));
+  // The two objects are penetrating.
+  EXPECT_NEAR(-(result.nearest_points[0] - result.nearest_points[1]).norm(),
+              result.min_distance, request.distance_tolerance);
+  // p_CPc is the position of the witness point Pc on the cylinder, measured
+  // and expressed in the cylinder frame C.
+  const Vector3<S> p_CPc = X_WC.inverse() * result.nearest_points[0];
+  EXPECT_LE(std::abs(p_CPc(2)), cylinder_length / 2);
+  EXPECT_LE(p_CPc.template head<2>().norm(), cylinder_radius);
+  // p_SPs is the position of the witness point Ps on the sphere, measured and
+  // expressed in the sphere frame S.
+  const Vector3<S> p_SPs = X_WS.inverse() * result.nearest_points[1];
+  EXPECT_LE(p_SPs.norm(), sphere_radius);
+}
+
+// This is a *specific* case that has cropped up in the wild that reaches the
+// unexpected `expandPolytope()` error. This error was reported in
+// https://github.com/flexible-collision-library/fcl/issues/319
+template <typename S>
+void test_distance_cylinder_box1() {
+  using CollisionGeometryPtr_t = std::shared_ptr<fcl::CollisionGeometryd>;
+  const S cylinder_radius = 0.05;
+  const S cylinder_length = 0.06;
+  CollisionGeometryPtr_t cylinder_geo(
+      new fcl::Cylinder<S>(cylinder_radius, cylinder_length));
+  Transform3<S> X_WC = Transform3<S>::Identity();
+  X_WC.matrix() << -0.99999999997999022838, 6.2572835802045040178e-10,
+      6.3260669852976095481e-06, 0.57500009756757608503,
+      6.3260669851683709551e-06, -6.3943303429958554955e-10,
+      0.99999999997999056145, -0.42711963046787942977,
+      6.2573180158128459924e-10, 1, 6.3942912945996747041e-10,
+      1.1867093358746836351, 0, 0, 0, 1;
+  fcl::CollisionObject<S> cylinder(cylinder_geo, X_WC);
+
+  const Vector3<S> box_size(0.025, 0.35, 1.845);
+  CollisionGeometryPtr_t box_geo(
+      new fcl::Box<S>(box_size(0), box_size(1), box_size(2)));
+  Transform3<S> X_WB = Transform3<S>::Identity();
+  X_WB.matrix() << 6.1232339957367660359e-17, -1, 0, 0.80000000000000004441, 1,
+      6.1232339957367660359e-17, 0, -0.45750000000000001776, 0, 0, 1,
+      1.0224999999999999645, 0, 0, 0, 1;
+  fcl::CollisionObject<S> box(box_geo, X_WB);
+
+  fcl::DistanceRequest<S> request;
+  request.gjk_solver_type = GJKSolverType::GST_LIBCCD;
+  request.distance_tolerance = 1e-6;
+  request.enable_signed_distance = true;
+  fcl::DistanceResult<S> result;
+
+  ASSERT_NO_THROW(fcl::distance(&cylinder, &box, request, result));
+  EXPECT_NEAR(result.min_distance,
+              (result.nearest_points[0] - result.nearest_points[1]).norm(),
+              request.distance_tolerance);
+  // p_CPc is the position of the witness point Pc on the cylinder, measured
+  // and expressed in the cylinder frame C.
+  const Vector3<S> p_CPc = X_WC.inverse() * result.nearest_points[0];
+  EXPECT_LE(std::abs(p_CPc(2)), cylinder_length / 2);
+  EXPECT_LE(p_CPc.template head<2>().norm(), cylinder_radius);
+  // p_BPb is the position of the witness point Pb on the box, measured and
+  // expressed in the box frame B.
+  const Vector3<S> p_BPb = X_WB.inverse() * result.nearest_points[1];
+  EXPECT_TRUE((p_BPb.array().abs() <=
+               box_size.array() / 2 + 10 * std::numeric_limits<S>::epsilon())
+                  .all());
+}
+
+// This is a *specific* case that has cropped up in the wild that reaches the
+// unexpected `validateNearestFeatureOfPolytopeBeingEdge` error. This error was
+// reported in https://github.com/flexible-collision-library/fcl/issues/388
+template <typename S>
+void test_distance_box_box1() {
+  using CollisionGeometryPtr_t = std::shared_ptr<fcl::CollisionGeometryd>;
+  const Vector3<S> box1_size(0.03, 0.12, 0.1);
+  CollisionGeometryPtr_t box1_geo(
+      new fcl::Box<S>(box1_size(0), box1_size(1), box1_size(2)));
+  Transform3<S> X_WB1 = Transform3<S>::Identity();
+  X_WB1.matrix() << -3.0627937852578681533e-08, -0.99999999999999888978,
+      -2.8893865161583314238e-08, 0.63499979627350811029, 0.9999999999999980016,
+      -3.0627939739957803544e-08, 6.4729926918527511769e-08,
+      -0.48500002215636439651, -6.4729927722963847085e-08,
+      -2.8893863029448751323e-08, 0.99999999999999711342, 1.0778146458339641356,
+      0, 0, 0, 1;
+  fcl::CollisionObject<S> box1(box1_geo, X_WB1);
+
+  const Vector3<S> box2_size(0.025, 0.35, 1.845);
+  CollisionGeometryPtr_t box2_geo(
+      new fcl::Box<S>(box2_size(0), box2_size(1), box2_size(2)));
+  Transform3<S> X_WB2 = Transform3<S>::Identity();
+  X_WB2.matrix() << 6.1232339957367660359e-17, -1, 0, 0.80000000000000004441, 1,
+      6.1232339957367660359e-17, 0, -0.45750000000000001776, 0, 0, 1,
+      1.0224999999999999645, 0, 0, 0, 1;
+  fcl::CollisionObject<S> box2(box2_geo, X_WB2);
+
+  fcl::DistanceRequest<S> request;
+  request.gjk_solver_type = GJKSolverType::GST_LIBCCD;
+  request.distance_tolerance = 9.9999999999999995475e-07;
+  request.enable_signed_distance = true;
+  fcl::DistanceResult<S> result;
+
+  EXPECT_NO_THROW(fcl::distance(&box1, &box2, request, result));
+}
+
 //==============================================================================
 
 GTEST_TEST(FCL_NEGATIVE_DISTANCE, sphere_sphere_ccd)
@@ -184,6 +320,20 @@ GTEST_TEST(FCL_NEGATIVE_DISTANCE, sphere_capsule_ccd)
 GTEST_TEST(FCL_NEGATIVE_DISTANCE, sphere_capsule_indep)
 {
   test_distance_spherecapsule<double>(GST_INDEP);
+}
+
+GTEST_TEST(FCL_SIGNED_DISTANCE, cylinder_sphere1_ccd)
+{
+  test_distance_cylinder_sphere1<double>();
+}
+
+GTEST_TEST(FCL_SIGNED_DISTANCE, cylinder_box1_ccd)
+{
+  test_distance_cylinder_box1<double>();
+}
+
+GTEST_TEST(FCL_SIGNED_DISTANCE, box_box1_ccd) {
+  test_distance_box_box1<double>();
 }
 
 //==============================================================================
